@@ -23,7 +23,9 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -70,6 +72,12 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 		return nil
 	}
 
+	wasAlreadyScheduled := checkIfAlreadyScheduled(ctx, d.client, pod)
+	if wasAlreadyScheduled {
+		podlog.Info("Pod already scheduled before, do not modify pod. Let the disk decide.")
+		return nil
+	}
+
 	zones := listNodesToZones(ctx, d.client)
 	// If no zones found, use a default
 	if len(zones) == 0 {
@@ -103,6 +111,30 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 	}
 
 	return nil
+}
+
+func checkIfAlreadyScheduled(ctx context.Context, ctrlClient client.Client, pod *corev1.Pod) bool {
+	for _, volume := range pod.Spec.Volumes {
+		if volume.PersistentVolumeClaim != nil {
+			var pvc corev1.PersistentVolumeClaim
+			err := ctrlClient.Get(ctx, types.NamespacedName{
+				Namespace: pod.GetNamespace(),
+				Name:      volume.PersistentVolumeClaim.ClaimName,
+			}, &pvc)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return false
+				}
+				// Todo: Log the error and return false to indicate we cannot determine the PVC status
+				return false // Or should we return true here?
+			}
+			if pvc.Status.Phase == corev1.ClaimBound {
+				return true
+			}
+		}
+	}
+	// If we reach here, it means none of the PVCs are bound
+	return false
 }
 
 func listNodesToZones(ctx context.Context, ctrlClient client.Client) []string {
