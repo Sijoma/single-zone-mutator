@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - nodes
+  - persistentvolumeclaims
   verbs:
   - get
   - list
