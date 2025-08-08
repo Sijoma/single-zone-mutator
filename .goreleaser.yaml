@@ -37,12 +37,6 @@ changelog:
       order: 1
     - title: Others
       order: 999
-  footer: |
-    ---
-    **Install this release:**
-    ```sh
-    kubectl apply -f https://github.com/Sijoma/single-zone-mutator/releases/download/{{ .Tag }}/install.yaml
-    ```
 
 dockers:
   - id: single-zone-mutator
@@ -59,6 +53,16 @@ release:
   prerelease: auto
   mode: replace
   name_template: "{{.ProjectName}} {{.Version}}"
+  header: |
+    ## 🚀 New Release ({{ .Date }})
+
+    Welcome to this new release!
+  footer: |
+    ---
+    **Install this release:**
+    ```sh
+    kubectl apply -f https://github.com/Sijoma/{{.ProjectName}}/releases/download/{{ .Tag }}/install.yaml
+    ```
 
 source:
   enabled: false
