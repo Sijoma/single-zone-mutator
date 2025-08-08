@@ -63,7 +63,8 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 	}
 	podlog.Info("Defaulting for Pod", "name", pod.GetName())
 
-	if !strings.HasSuffix("-zeebe", pod.GetNamespace()) {
+	// Annotation here to decide whether to apply the defaulting logic
+	if !strings.HasSuffix(pod.GetNamespace(), "-zeebe") {
 		podlog.Info("Skipping defaulting for Pod not in zeebe namespace", "namespace", pod.GetNamespace())
 		return nil
 	}
@@ -93,7 +94,7 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 
 	// If no zones found, use a default
 	if len(zones) == 0 {
-		podlog.Info("No zones found, do nothing")
+		podlog.Info("No zones found, do not modify pod.")
 		return nil
 	}
 
