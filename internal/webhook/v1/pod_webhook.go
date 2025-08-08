@@ -19,6 +19,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,29 +70,7 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 		return nil
 	}
 
-	var nodeList corev1.NodeList
-	if err := d.client.List(ctx, &nodeList); err != nil {
-		podlog.Error(err, "Failed to list nodes for Pod defaulting")
-		return nil
-	}
-
-	zones := []string{}
-	for _, node := range nodeList.Items {
-		if z, ok := node.Labels["topology.kubernetes.io/zone"]; ok {
-			// Check if zone is already in the list to avoid duplicates
-			found := false
-			for _, existingZone := range zones {
-				if existingZone == z {
-					found = true
-					break
-				}
-			}
-			if !found {
-				zones = append(zones, z)
-			}
-		}
-	}
-
+	zones := listNodesToZones(ctx, d.client)
 	// If no zones found, use a default
 	if len(zones) == 0 {
 		podlog.Info("No zones found, do not modify pod.")
@@ -124,6 +103,33 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 	}
 
 	return nil
+}
+
+func listNodesToZones(ctx context.Context, ctrlClient client.Client) []string {
+	var nodeList corev1.NodeList
+	if err := ctrlClient.List(ctx, &nodeList); err != nil {
+		podlog.Error(err, "Failed to list nodes for Pod defaulting")
+		return nil
+	}
+
+	zones := []string{}
+	for _, node := range nodeList.Items {
+		if z, ok := node.Labels["topology.kubernetes.io/zone"]; ok {
+			// Check if zone is already in the list to avoid duplicates
+			found := false
+			for _, existingZone := range zones {
+				if existingZone == z {
+					found = true
+					break
+				}
+			}
+			if !found {
+				zones = append(zones, z)
+			}
+		}
+	}
+	sort.Strings(zones) // Sort alphabetically for deterministic order
+	return zones
 }
 
 // hashString creates a simple hash from a string to get a deterministic number
