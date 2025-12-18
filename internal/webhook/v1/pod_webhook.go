@@ -37,9 +37,12 @@ import (
 var podlog = logf.Log.WithName("pod-resource")
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, namespaceSuffix string) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&corev1.Pod{}).
-		WithDefaulter(&PodCustomDefaulter{client: mgr.GetClient()}).
+		WithDefaulter(&PodCustomDefaulter{
+			client:          mgr.GetClient(),
+			namespaceSuffix: namespaceSuffix,
+		}).
 		Complete()
 }
 
@@ -52,7 +55,8 @@ func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 type PodCustomDefaulter struct {
-	client client.Client
+	client          client.Client
+	namespaceSuffix string
 }
 
 var _ webhook.CustomDefaulter = &PodCustomDefaulter{}
@@ -66,9 +70,10 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 	}
 	podlog.Info("Defaulting for Pod", "name", pod.GetName())
 
-	// Annotation here to decide whether to apply the defaulting logic
-	if !strings.HasSuffix(pod.GetNamespace(), "-zeebe") {
-		podlog.Info("Skipping defaulting for Pod not in zeebe namespace", "namespace", pod.GetNamespace())
+	// Check if the pod's namespace matches the configured suffix
+	if !strings.HasSuffix(pod.GetNamespace(), d.namespaceSuffix) {
+		podlog.Info("Skipping defaulting for Pod not matching namespace suffix",
+			"namespace", pod.GetNamespace(), "suffix", d.namespaceSuffix)
 		return nil
 	}
 
@@ -144,21 +149,15 @@ func listNodesToZones(ctx context.Context, ctrlClient client.Client) []string {
 		return nil
 	}
 
-	zones := []string{}
+	zoneSet := make(map[string]struct{})
 	for _, node := range nodeList.Items {
 		if z, ok := node.Labels["topology.kubernetes.io/zone"]; ok {
-			// Check if zone is already in the list to avoid duplicates
-			found := false
-			for _, existingZone := range zones {
-				if existingZone == z {
-					found = true
-					break
-				}
-			}
-			if !found {
-				zones = append(zones, z)
-			}
+			zoneSet[z] = struct{}{}
 		}
+	}
+	zones := make([]string, 0, len(zoneSet))
+	for z := range zoneSet {
+		zones = append(zones, z)
 	}
 	sort.Strings(zones) // Sort alphabetically for deterministic order
 	return zones

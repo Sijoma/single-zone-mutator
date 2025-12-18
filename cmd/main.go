@@ -61,6 +61,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var namespaceSuffix string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -79,6 +80,8 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&namespaceSuffix, "namespace-suffix", "-zeebe",
+		"The namespace suffix to filter pods for zone assignment. Only pods in namespaces ending with this suffix will be processed.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -202,7 +205,7 @@ func main() {
 
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1.SetupPodWebhookWithManager(mgr); err != nil {
+		if err := webhookv1.SetupPodWebhookWithManager(mgr, namespaceSuffix); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 			os.Exit(1)
 		}
