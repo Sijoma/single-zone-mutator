@@ -19,7 +19,7 @@ package v1
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -159,7 +159,7 @@ func listNodesToZones(ctx context.Context, ctrlClient client.Client) []string {
 	for z := range zoneSet {
 		zones = append(zones, z)
 	}
-	sort.Strings(zones) // Sort alphabetically for deterministic order
+	slices.Sort(zones) // Sort alphabetically for deterministic order
 	return zones
 }
 
