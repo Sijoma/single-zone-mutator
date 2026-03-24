@@ -62,7 +62,8 @@ type PodCustomDefaulter struct {
 var _ webhook.CustomDefaulter = &PodCustomDefaulter{}
 
 const (
-	zoneAnnotationKey = "single-zone-mutator.sijoma.io/zone"
+	zoneAnnotationKey   = "single-zone-mutator.sijoma.io/zone"
+	optIntAnnotationKey = "single-zone-mutator.sijoma.io/enabled"
 )
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Pod.
@@ -74,18 +75,22 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 	}
 	podlog.Info("Defaulting for Pod", "name", pod.GetName())
 
-	// Check if the pod's namespace matches the configured suffix
-	if !strings.HasSuffix(pod.GetNamespace(), d.namespaceSuffix) {
-		podlog.Info("Skipping defaulting for Pod not matching namespace suffix",
-			"namespace", pod.GetNamespace(), "suffix", d.namespaceSuffix)
+	// Lookup namespace
+	var ns corev1.Namespace
+	err := d.client.Get(ctx, types.NamespacedName{Name: pod.GetNamespace()}, &ns)
+	if err != nil {
+		return err
+	}
+
+	isInSuffixedNamespace := strings.HasSuffix(ns.Name, d.namespaceSuffix)
+	isInAnnotatedNamespace := ns.Annotations[optIntAnnotationKey] == "true"
+	if !(isInSuffixedNamespace || isInAnnotatedNamespace) {
+		podlog.Info("Skipping defaulting for Pod: namespace not matching suffix and not opted-in via annotation",
+			"namespace", pod.GetNamespace(), "suffix", d.namespaceSuffix, "annotation", optIntAnnotationKey)
 		return nil
 	}
 
-	existingZoneAnnotation, err := d.lookupZoneOfNamespace(ctx, pod.GetNamespace())
-	if err != nil {
-		podlog.Error(err, "Failed to lookup zone of namespace", "namespace", pod.GetNamespace())
-		return err
-	}
+	existingZoneAnnotation := ns.Annotations[zoneAnnotationKey]
 
 	if existingZoneAnnotation != "" {
 		podlog.Info("Namespace already has zone annotation, setting node affinity to match zone")
@@ -141,15 +146,6 @@ func setNodeAffinity(pod *corev1.Pod, zone string) {
 			},
 		},
 	}
-}
-
-func (d *PodCustomDefaulter) lookupZoneOfNamespace(ctx context.Context, namespace string) (string, error) {
-	var ns corev1.Namespace
-	err := d.client.Get(ctx, types.NamespacedName{Name: namespace}, &ns)
-	if err != nil {
-		return "", err
-	}
-	return ns.Annotations[zoneAnnotationKey], nil
 }
 
 func (d *PodCustomDefaulter) annotateNamespaceWithZone(ctx context.Context, namespace string, zone string) error {

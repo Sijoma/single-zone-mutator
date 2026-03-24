@@ -23,7 +23,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	// TODO (user): Add any additional imports if needed
 )
 
 var _ = Describe("Pod Webhook", func() {
@@ -53,6 +52,75 @@ var _ = Describe("Pod Webhook", func() {
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: nsName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			defer func() {
+				Expect(k8sClient.Delete(ctx, ns)).To(Succeed())
+			}()
+
+			// Create a node with a zone label
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node",
+					Labels: map[string]string{
+						"topology.kubernetes.io/zone": "zone-1",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, node)).To(Succeed())
+			defer func() {
+				Expect(k8sClient.Delete(ctx, node)).To(Succeed())
+			}()
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: nsName,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "test-container",
+							Image: "nginx",
+						},
+					},
+				},
+			}
+
+			// We need to use the real client for the defaulter because it fetches the namespace
+			d := &PodCustomDefaulter{
+				client:          k8sClient,
+				namespaceSuffix: "-zeebe",
+			}
+
+			err := d.Default(ctx, pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Check if namespace is annotated
+			updatedNs := &corev1.Namespace{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, updatedNs)).To(Succeed())
+			Expect(updatedNs.Annotations).To(HaveKeyWithValue("single-zone-mutator.sijoma.io/zone", "zone-1"))
+
+			// Check pod affinity
+			Expect(pod.Spec.Affinity).NotTo(BeNil())
+			Expect(pod.Spec.Affinity.NodeAffinity).NotTo(BeNil())
+			req := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			Expect(req.NodeSelectorTerms).To(HaveLen(1))
+			Expect(req.NodeSelectorTerms[0].MatchExpressions).To(ContainElement(corev1.NodeSelectorRequirement{
+				Key:      "topology.kubernetes.io/zone",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{"zone-1"},
+			}))
+		})
+		It("Should be possible to opt-in by annotation", func() {
+			nsName := "test-namespace-without-suffix"
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nsName,
+					Annotations: map[string]string{
+						optIntAnnotationKey: "true",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, ns)).To(Succeed())

@@ -283,14 +283,63 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should pin pods to in the same namespace to the same zone", func() {
+			testNamespace := "test-zone-pinning"
+
+			By("creating test namespace")
+			cmd := exec.Command("kubectl", "create", "ns", testNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+			defer func() {
+				By("cleaning up test namespace")
+				cmd := exec.Command("kubectl", "delete", "ns", testNamespace)
+				_, _ = utils.Run(cmd)
+			}()
+
+			By("creating three pods in the namespace")
+			podNames := []string{"test-pod-1", "test-pod-2", "test-pod-3"}
+			for _, podName := range podNames {
+				cmd = exec.Command("kubectl", "run", podName,
+					"--namespace", testNamespace,
+					"--image=busybox:latest",
+					"--restart=Never",
+					"--",
+					"sleep",
+					"3600")
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Failed to create pod %s", podName))
+			}
+
+			By("waiting for all pods to have nodeSelector applied by webhook")
+			for _, podName := range podNames {
+				verifyPodMutated := func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "pod", podName,
+						"-n", testNamespace,
+						"-o", "jsonpath={.spec.nodeSelector['topology\\.kubernetes\\.io/zone']}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).NotTo(BeEmpty(), fmt.Sprintf("Pod %s does not have zone nodeSelector yet", podName))
+				}
+				Eventually(verifyPodMutated).Should(Succeed())
+			}
+
+			By("verifying all pods are pinned to the same zone")
+			zones := make([]string, 0, len(podNames))
+			for _, podName := range podNames {
+				cmd = exec.Command("kubectl", "get", "pod", podName,
+					"-n", testNamespace,
+					"-o", "jsonpath={.spec.nodeSelector['topology\\.kubernetes\\.io/zone']}")
+				zone, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(zone).NotTo(BeEmpty(), fmt.Sprintf("Pod %s does not have zone nodeSelector", podName))
+				zones = append(zones, zone)
+			}
+
+			// All zones should be the same
+			Expect(zones[0]).To(Equal(zones[1]), "Pod 1 and Pod 2 are not in the same zone")
+			Expect(zones[0]).To(Equal(zones[2]), "Pod 1 and Pod 3 are not in the same zone")
+		})
 	})
 })
 
