@@ -46,7 +46,7 @@ func SetupPodWebhookWithManager(mgr ctrl.Manager, namespaceSuffix string) error 
 		Complete()
 }
 
-// +kubebuilder:rbac:groups="",resources=nodes;persistentvolumeclaims,verbs=list;get;watch
+// +kubebuilder:rbac:groups="",resources=nodes;persistentvolumeclaims;namespaces,verbs=list;get;watch;update
 // +kubebuilder:webhook:path=/mutate--v1-pod,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create;update,versions=v1,name=mpod-v1.kb.io,admissionReviewVersions=v1
 
 // PodCustomDefaulter struct is responsible for setting default values on the custom resource of the
@@ -60,6 +60,10 @@ type PodCustomDefaulter struct {
 }
 
 var _ webhook.CustomDefaulter = &PodCustomDefaulter{}
+
+const (
+	zoneAnnotationKey = "single-zone-mutator.sijoma.io/zone"
+)
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Pod.
 func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
@@ -77,6 +81,18 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 		return nil
 	}
 
+	existingZoneAnnotation, err := d.lookupZoneOfNamespace(ctx, pod.GetNamespace())
+	if err != nil {
+		podlog.Error(err, "Failed to lookup zone of namespace", "namespace", pod.GetNamespace())
+		return err
+	}
+
+	if existingZoneAnnotation != "" {
+		podlog.Info("Namespace already has zone annotation, setting node affinity to match zone")
+		setNodeAffinity(pod, existingZoneAnnotation)
+		return nil
+	}
+
 	wasAlreadyScheduled := checkIfAlreadyScheduled(ctx, d.client, pod)
 	if wasAlreadyScheduled {
 		podlog.Info("Pod already scheduled before, do not modify pod. Let the disk decide.")
@@ -90,11 +106,22 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 		return nil
 	}
 
-	// Get deterministic zone based on namespace
 	zoneIndex := hashString(pod.GetNamespace()) % len(zones)
 	zone := zones[zoneIndex]
 	podlog.Info("Selected zone for namespace", "namespace", pod.GetNamespace(), "zone", zone)
 
+	// Annotate the namespace with the zone information so that it can be looked up by humans & to check it later
+	err = d.annotateNamespaceWithZone(ctx, pod.GetNamespace(), zone)
+	if err != nil {
+		podlog.Error(err, "Failed to update namespace with zone annotation", "namespace", pod.GetNamespace(), "zone", zone)
+		return err
+	}
+	podlog.Info("Annotated namespace with zone", "namespace", pod.GetNamespace(), "zone", zone)
+	setNodeAffinity(pod, zone)
+	return nil
+}
+
+func setNodeAffinity(pod *corev1.Pod, zone string) {
 	if pod.Spec.Affinity == nil {
 		pod.Spec.Affinity = &corev1.Affinity{}
 	}
@@ -114,7 +141,32 @@ func (d *PodCustomDefaulter) Default(ctx context.Context, obj runtime.Object) er
 			},
 		},
 	}
+}
 
+func (d *PodCustomDefaulter) lookupZoneOfNamespace(ctx context.Context, namespace string) (string, error) {
+	var ns corev1.Namespace
+	err := d.client.Get(ctx, types.NamespacedName{Name: namespace}, &ns)
+	if err != nil {
+		return "", err
+	}
+	return ns.Annotations[zoneAnnotationKey], nil
+}
+
+func (d *PodCustomDefaulter) annotateNamespaceWithZone(ctx context.Context, namespace string, zone string) error {
+	var ns corev1.Namespace
+	err := d.client.Get(ctx, types.NamespacedName{Name: namespace}, &ns)
+	if err != nil {
+		return fmt.Errorf("failed to get namespace %q: %w", namespace, err)
+	}
+
+	if ns.Annotations == nil {
+		ns.Annotations = make(map[string]string)
+	}
+
+	if ns.Annotations[zoneAnnotationKey] != zone {
+		ns.Annotations[zoneAnnotationKey] = zone
+		return d.client.Update(ctx, &ns)
+	}
 	return nil
 }
 

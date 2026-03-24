@@ -7,9 +7,11 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
   - nodes
   - persistentvolumeclaims
   verbs:
   - get
   - list
+  - update
   - watch
